@@ -1,0 +1,44 @@
+#!/bin/bash
+
+# Define output file
+OUTPUT_FILE="emr_results.csv"
+
+# Recreate the output file each time; add CSV columns
+echo "Cluster ID,Instance Type,Processor Architecture,Processor Manufacturer,EMR OS,Private IP" > "$OUTPUT_FILE"
+
+# Current date and yesterday
+CURRENT_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+START_DATE=$(date -u -d "1 day ago" +"%Y-%m-%dT%H:%M:%SZ")
+
+# List all 
+clusters=$(aws emr list-clusters --created-after "$START_DATE" --created-before "$CURRENT_DATE" --query 'Clusters[*].Id' --output text)
+
+if [ -z "$clusters" ]; then
+  echo "No EMR clusters found in the last 24 hours."
+  exit 0
+fi
+
+# Take the list of EMRs and pull all requested information on them
+for cluster_id in $clusters; do
+  emr_os=$(aws emr describe-cluster --cluster-id "$cluster_id" --query 'Cluster.ReleaseLabel' --output text)
+  instances=$(aws emr list-instances --cluster-id "$cluster_id" --query 'Instances[*].[InstanceType,PrivateIpAddress]' --output text)
+
+  if [ -z "$instances" ]; then
+    continue
+  fi
+
+  # Get EMR CPU information and IP address
+  while read -r instance_type private_ip; do
+    processor_info=$(aws ec2 describe-instance-types --instance-types "$instance_type" --query 'InstanceTypes[*].ProcessorInfo.SupportedArchitectures' --output text)
+    processor_manufacturer=$(aws ec2 describe-instance-types --instance-types "$instance_type" --query 'InstanceTypes[*].ProcessorInfo.SupportedUefiProcessors' --output text)
+    processor_info=${processor_info:-"Not Available"}
+    processor_manufacturer=${processor_manufacturer:-"Not Available"}
+    emr_os=${emr_os:-"Not Available"}
+    private_ip=${private_ip:-"Not Available"}
+
+    # Output results
+    echo "$cluster_id,$instance_type,$processor_info,$processor_manufacturer,$emr_os,$private_ip" >> "$OUTPUT_FILE"
+  done <<< "$instances"
+done
+
+echo "Results written to $OUTPUT_FILE"
